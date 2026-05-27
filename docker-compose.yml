@@ -1,0 +1,107 @@
+version: '3.8'
+
+# ════════════════════════════════════════════════════════════════
+# LUỒNG KHỞI ĐỘNG:
+#   1. postgres   → khởi động, healthcheck xác nhận sẵn sàng
+#   2. agent_ngrok → khởi động (không cần chờ agent_app)
+#   3. agent_app  → chờ postgres healthy + agent_ngrok started
+#                   entrypoint.sh tự polling cho tới khi có tunnel URL
+# ════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── DỊCH VỤ 1: PostgreSQL Database ──────────────────────────
+  # Lưu trữ Checkpoint state của LangGraph để agent nhớ ngữ cảnh hội thoại
+  postgres:
+    image: postgres:15-alpine
+    container_name: agent_postgres
+    restart: always
+    environment:
+      # Thông tin đăng nhập - khớp với DATABASE_URL trong env của agent_app bên dưới
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-100903}
+      POSTGRES_DB: ${POSTGRES_DB:-fanpage-agent}
+    ports:
+      # Dùng 5433 trên host vì 5432 đã bị PostgreSQL local chiếm
+      # agent_app kết nối qua mạng nội bộ Docker (cổng 5432 bên trong) → không bị ảnh hưởng
+      - "5433:5432"
+    volumes:
+      # Volume được đặt tên: dữ liệu tồn tại ngay cả khi xóa và tạo lại container
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready kiểm tra postgres đã sẵn sàng nhận kết nối chưa
+      # agent_app sẽ chờ healthcheck này PASS trước khi khởi động (depends_on condition)
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s     # Kiểm tra mỗi 5 giây
+      timeout: 5s      # Timeout mỗi lần kiểm tra
+      retries: 10      # Thử lại tối đa 10 lần trước khi báo unhealthy
+
+
+  # ── DỊCH VỤ 2: Ngrok Tunnel ─────────────────────────────────
+  # Tạo đường hầm HTTPS public để Telegram gửi Webhook update về server nội bộ
+  # Tên service PHẢI là 'agent_ngrok' → entrypoint.sh dùng DNS này để gọi http://agent_ngrok:4040
+  agent_ngrok:
+    image: ngrok/ngrok:latest
+    container_name: agent_ngrok
+    restart: always
+    environment:
+      # BẮT BUỘC: Đăng nhập tài khoản Ngrok để tạo tunnel có domain cố định (free tier)
+      # Lấy authtoken tại: https://dashboard.ngrok.com/get-started/your-authtoken
+      # Thêm vào file .env: NGROK_AUTHTOKEN=your_token_here
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    # Lệnh yêu cầu Ngrok mở tunnel HTTP vào service agent_app cổng 8000
+    # Dùng tên service Docker 'agent_app' (không phải localhost) vì các container giao tiếp qua Docker bridge network
+    command: "http agent_app:8000"
+    ports:
+      # Mở Dashboard API Ngrok ra host để entrypoint.sh có thể gọi từ bên trong container agent_app
+      # Cổng 4040 cũng dùng để xem traffic logs tại http://localhost:4040 trên browser
+      - "4040:4040"
+    # Không có depends_on: agent_ngrok khởi động độc lập
+    # Nếu agent_app chưa sẵn sàng, Ngrok tự retry kết nối → không gây lỗi fatal
+
+
+  # ── DỊCH VỤ 3: FastAPI Multi-Agent Application ──────────────
+  agent_app:
+    # Build image từ Dockerfile trong thư mục hiện tại
+    build: .
+    container_name: multi_agent_app
+    # on-failure: chỉ restart khi bị crash, không restart khi dừng bằng docker compose down
+    restart: on-failure
+    ports:
+      - "8000:8000"
+    # Nạp toàn bộ biến từ file .env (API keys, Bot Token, v.v.)
+    env_file:
+      - .env
+    environment:
+      # GHI ĐÈ DATABASE_URL từ .env: thay 'localhost' bằng tên service 'postgres'
+      # Trong Docker network, các container giao tiếp qua tên service, không qua localhost
+      # asyncpg: driver bất đồng bộ, bắt buộc cho LangGraph checkpoint + FastAPI async
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-100903}@postgres:5432/${POSTGRES_DB:-fanpage-agent}
+      # GHI ĐÈ OLLAMA_BASE_URL: trỏ tới host.docker.internal thay vì localhost
+      # Bên trong container, 'localhost' = container chính nó, không phải máy host
+      # 'host.docker.internal' là hostname đặc biệt được Docker resolve thành IP của máy host
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      # Trên Linux, host.docker.internal không tự động có sẵn như trên Mac/Windows
+      # Dòng này ánh xạ hostname đó tới IP gateway của Docker bridge network (= IP máy host)
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Mount toàn bộ thư mục code → chỉnh sửa file trên host phản ánh ngay vào container (live dev)
+      - .:/app
+      # Mount riêng thư mục assets để video/ảnh Agent tạo ra được lưu trên host machine
+      - ./assets:/app/assets
+    depends_on:
+      # Chờ postgres HEALTHY (pg_isready pass) mới khởi động - tránh lỗi "connection refused" khi init DB
+      postgres:
+        condition: service_healthy
+      # Chờ agent_ngrok đã STARTED (không cần healthy vì ngrok không có healthcheck)
+      # entrypoint.sh sẽ tự polling http://agent_ngrok:4040/api/tunnels cho đến khi tunnel sẵn sàng
+      agent_ngrok:
+        condition: service_started
+
+
+# ── VOLUMES ─────────────────────────────────────────────────────
+volumes:
+  # Named volume để dữ liệu PostgreSQL tồn tại lâu dài
+  # Không bị xóa khi chạy: docker compose down (chỉ mất khi: docker compose down -v)
+  pgdata:

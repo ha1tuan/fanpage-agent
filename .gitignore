@@ -1,0 +1,21 @@
+# Biến môi trường cực kỳ bảo mật (CẤM ĐẨY LÊN GIT)
+.env
+*.env
+
+# Thư mục sinh dữ liệu của Agent (Không đẩy video test lên)
+assets/videos/*
+assets/photos/*
+!assets/videos/.gitkeep
+!assets/photos/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+vnv/
+
+# Docker & Hệ thống
+.dockerignore
+pgdata/
+.DS_Store
