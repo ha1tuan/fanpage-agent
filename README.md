@@ -41,64 +41,7 @@ Kiến trúc Multi-Agent (6 Agent) vận hành trên **FastAPI + LangGraph**, tr
     N5         -->|"Thành công ✅ / Thất bại ❌"| TGBOT
     TGBOT      -->|"Thông báo kết quả"| ADMIN
 
-```
-
----
-
-## Kiến Trúc Thư Mục
-
-```
-
-fanpage-agent/
-│
-├── main.py # Entry point — FastAPI app + route mounting
-├── Dockerfile # Python 3.11-slim, cài FFmpeg & ImageMagick
-├── docker-compose.yml # Orchestrate: postgres · ngrok · agent_app
-├── entrypoint.sh # Khởi động Uvicorn bên trong container
-├── requirements.txt
-├── .env # ← KHÔNG commit (xem mục Bảo mật)
-├── .env.example # Template biến môi trường
-└── .gitignore
-│
-├── app/
-│ ├── core/
-│ │ └── settings.py # Pydantic Settings — load toàn bộ .env
-│ │
-│ ├── services/
-│ │ └── llm_service.py # Adapter: Ollama (local) hoặc Gemini (cloud)
-│ │
-│ ├── agents/
-│ │ ├── states.py # ContentProductionState — schema trạng thái graph
-│ │ ├── graph.py # Build + compile LangGraph workflow
-│ │ │
-│ │ └── nodes/
-│ │ ├── scrapers/
-│ │ │ ├── scraper.py # Exa AI search + LLM extract insights
-│ │ │ └── prompt.py # System prompts cho Scraper
-│ │ ├── writers/
-│ │ │ ├── writer.py # Sinh caption / content / video_script (JSON)
-│ │ │ └── prompt.py # System prompts giọng Gen-Z tiếng Việt
-│ │ ├── video_compose/
-│ │ │ └── video_compose.py # Kling AI + MoviePy + Edge TTS (vi-VN-NamMinhNeural)
-│ │ ├── image_gen/
-│ │ │ └── image_gen.py # Gemini Imagen 3 (tích hợp, chưa kích hoạt trong graph)
-│ │ ├── publisher/
-│ │ │ └── publisher.py # Meta Graph API — đăng video/ảnh/text lên Fanpage
-│ │ └── notifier/
-│ │ └── notifier.py # Telegram sendMessage — thông báo kết quả cuối
-│ │
-│ └── api/
-│ ├── routes.py # REST endpoints quản lý Agent (/agents/\*)
-│ └── telegram_routes.py # Webhook handler nhận lệnh từ Telegram Bot
-│
-└── assets/
-├── images/ # Ảnh sinh ra bởi Imagen 3
-├── videos/ # Video MP4 hoàn chỉnh sau khi dựng
-└── music/ # Nhạc nền (tùy chọn)
-
 ````
-
----
 
 ## Thành Phần Công Nghệ
 
